@@ -1,4 +1,5 @@
 import asyncio
+import time
 
 import websocket
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
@@ -86,66 +87,81 @@ async def get_token(game_id: str):
 
 
 
-
+wait={}
 
 @app.websocket('/ws/{game_id}')
 async def websocket_endpoint(game_id: str, ws: WebSocket):
+    global wait
     print("accepting...")
     await ws.accept()
-    """
-    Handle WebSocket connections.
-    """
-    try:
-        # Authenticate the player
-        token = ws.headers['Authorization']
+    while True:
+        try:
+            # Authenticate the player
+            token = ws.headers['Authorization']
 
-        for player_id, player_info in get_current_game(game_id)['players'].items():
-            if player_info['token'] == token:
-                get_current_game(game_id)['players'][player_id]['ws'] = ws
-                #await send_game_state(game_id)
-                break
-            #else:
-                #raise WebSocketDisconnect()
+            for player_id, player_info in get_current_game(game_id)['players'].items():
+                if player_info['token'] == token:
+                    get_current_game(game_id)['players'][player_id]['ws'] = ws
+                    #await send_game_state(game_id)
+                    break
+                #else:
+                    #raise WebSocketDisconnect()
 
-        message =await ws.receive_json()
-        print("recived:",message)
-        if message['type'] == 'move':
-                print("PLAYER:move")
-                # Check if it is the player's turn
+            message =await ws.receive_json()
+            print("recived:",message)
+            if message['type'] == 'play_white':
                 current_player = get_current_player(game_id, token)
-                print("B1")
-                if current_player != get_current_game(game_id)['turn']:
-                    print("B2#")
-                    print(get_current_game(game_id)['turn'])
-                    print(current_player)
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Not your turn')
-                print("B2")
-                # Update the game state with the move
-                #move = message['move']
-                #get_current_game(game_id)['board'].make_move(move)
+                if current_player == 0:
+                    print("$",get_current_game(game_id)['turn'])
+                    print("$",current_player)
+                    await ws.send_text("True")
+                else:
+                    print("#$", current_player)
+                    await ws.send_text("False")
+            if message['type'] == 'move':
+                    print("PLAYER:move")
+                    # Check if it is the player's turn
+                    current_player = get_current_player(game_id, token)
+                    print("B1")
+                    if current_player != get_current_game(game_id)['turn']:
+                        print("B2#")
+                        print(get_current_game(game_id)['turn'])
+                        print(current_player)
+                        #raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail='Not your turn')
+                        await ws.send_text("not your move")
+                        continue
+                    print("B2")
+                    # Update the game state with the move
+                    #move = message['move']
+                    #get_current_game(game_id)['board'].make_move(move)
 
-                # Switch to the other player's turn
-                get_current_game(game_id)['turn'] = 1 - get_current_game(game_id)['turn']
-                print("B3")
-                # Broadcast the new state of the game to both players
-                print("Send")
-                await ws.send_text("success")
-                await send_game_state(game_id)
-        elif message['type'] == 'test':
-            await ws.send_text("test_successful")
-            print(message['type'])
-        elif message['type'] == 'connect':
-            print(message['type'])
-            await ws.send_text("You are conncted")
-
-
-    except WebSocketDisconnect:
-        print("error...")
-        # Remove the player from the game
-        for player_id, player_info in get_current_game(game_id)['players'].items():
-            if player_info['ws'] == ws:
-                get_current_game(game_id)['players'][player_id]['ws'] = None
-                break
+                    # Switch to the other player's turn
+                    get_current_game(game_id)['turn'] = 1 - get_current_game(game_id)['turn']
+                    print("B3")
+                    # Broadcast the new state of the game to both players
+                    print("Send")
+                    await ws.send_text("success")
+                    if game_id in wait:
+                        for ws2 in wait[game_id]:
+                            print("Trully Send")
+                            await ws2.send_text("your move")
+                    #await send_game_state(game_id)
+            elif message['type'] == 'test':
+                await ws.send_text("test_successful")
+                print(message['type'])
+            elif message['type'] == 'connect':
+                print(message['type'])
+                await ws.send_text("You are conncted")
+            elif message['type'] == 'wait':
+                print(message['type'])
+                wait[game_id]=wait.get(game_id,[])+[ws]
+        except WebSocketDisconnect:
+            print("error...")
+            # Remove the player from the game
+            for player_id, player_info in get_current_game(game_id)['players'].items():
+                if player_info['ws'] == ws:
+                    get_current_game(game_id)['players'][player_id]['ws'] = None
+            break
 
     # Broadcast the new state of the game to both players
 
