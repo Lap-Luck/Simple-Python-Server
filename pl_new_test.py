@@ -5,7 +5,8 @@ import requests
 import websocket #websocket-client
 
 #time.sleep(delay)
-game_id=str(random.randrange(1,1234))
+game_id=str(100)#str(random.randrange(1,1234))
+name= 'alg1'
 
 
 def play(player_id,sever_talker):
@@ -29,9 +30,11 @@ def play(player_id,sever_talker):
 
 
 def start_play(id):
-    response = requests.post('http://localhost:8001/games/'+game_id+'/tokens')
+    response = requests.post('http://localhost:8001/register/'+name+'/owner1')
+    response = requests.post('http://localhost:8001/games/'+game_id+'/tokens/'+str(response.json()['id']))
     assert response.status_code == 200
     token = response.json()['token']
+    print(response.json()['status'])
     ws = websocket.WebSocket()
     ws.connect('ws://localhost:8001/ws/' + game_id, header={'Authorization': token}),
     sever_talker=lambda message:[
@@ -44,5 +47,6 @@ def start_play(id):
 
 # Create new threads
 threading.Thread(target=start_play,args=[0]).start()
+name = 'alg2'
 threading.Thread(target=start_play,args=[1]).start()
 

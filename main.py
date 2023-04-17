@@ -6,6 +6,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depe
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import secrets
+import json
 
 app = FastAPI()
 
@@ -13,6 +14,11 @@ security = HTTPBearer()
 
 # Store the state of the games in a dictionary of dictionaries
 games = {}
+players = {} #from file
+
+with open("players.json", "r") as fp:
+    # load the json data into a dictionary
+    players = json.load(fp)
 
 def get_current_game(game_id: str):
     """
@@ -56,25 +62,38 @@ async def send_game_state(game_id: str):
     except Exception as e:
         print(f'An exception occurred: {e}')
 
-@app.post('/games/{game_id}/tokens')
-async def get_token(game_id: str):
+
+@app.post('/games/{game_id}/tokens/{player_id}')
+async def get_token(game_id: str, player_id: str):
     """
     Issue a token to the player for the specified game.
     If the game doesn't exist, create a new game.
     """
+    registration_status: str
+    player = players.get(player_id)
+
+    if player_id == 0:
+        registration_status = 'playing as guest'
+    elif not player:
+        player_id = 0
+        registration_status = 'id not found, playing as guest'
+    else:
+        registration_status = 'playing as ' + player['name']
+
     game = games.get(game_id)
     if not game:
         game = {
             'board': "boardGoesHere",
             'turn': 0,
             'players': {
-                0: {'token': secrets.token_hex(16), 'ws': None},
-                1: {'token': None, 'ws': None}
-            }
+                0: {'token': secrets.token_hex(16), 'ws': None, 'id': player_id},
+                1: {'token': None, 'ws': None, 'id' : None}
+            },
+            'subscribers':{}
         }
         games[game_id] = game
         print("game created: " + game_id)
-        return {'token': game['players'][0]['token']}
+        return {'token': game['players'][0]['token'], 'status': registration_status}
 
     elif game['players'][1]['token']:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail='Game is full')
@@ -82,7 +101,31 @@ async def get_token(game_id: str):
     else:
         token = secrets.token_hex(16)
         game['players'][1]['token'] = token
-        return {'token': token}
+        game['players'][1]['id'] = player_id
+        return {'token': token, 'status': registration_status}
+
+
+@app.post('/register/{algorithm}/{owner}')
+async def register(algorithm: str, owner: str):
+    player = {
+        'name': algorithm,
+        'owner': owner,
+        'history' : {}
+    }
+
+    '''
+    history format: opponent, outcome
+    '''
+    players['0']['current_id'] += 1
+    players[str(players['0']['current_id'])] = player
+    with open("players.json", "w") as fp:
+        # dump the dictionary to the file
+        json.dump(players, fp)
+
+    return {'id': str(players['0']['current_id'])}
+
+
+
 
 
 
@@ -164,6 +207,23 @@ async def websocket_endpoint(game_id: str, ws: WebSocket):
             break
 
     # Broadcast the new state of the game to both players
+
+
+@app.websocket('/ws/{game_id}/spectate')
+async def websocket_endpoint(game_id: str, ws: WebSocket):
+    global wait
+    print("accepting...")
+    await ws.accept()
+    get_current_game(game_id)['subscribers'][str(len(get_current_game(game_id)['subscribers']))] = ws
+    while True:
+        try:
+            await ws.send_json({'board': get_current_game(game_id)['board'], 'turn':get_current_game(game_id)['turn']})
+        except WebSocketDisconnect:
+                for subscriber in get_current_game(game_id)['subscribers'].items():
+                    if subscriber == ws:
+                        subscriber = None
+                break
+
 
 
 uvicorn.run(app, host='127.0.0.1', port=8001)
