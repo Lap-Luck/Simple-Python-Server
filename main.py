@@ -7,6 +7,8 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
 import secrets
 import json
+import chess
+
 
 app = FastAPI()
 
@@ -83,7 +85,8 @@ async def get_token(game_id: str, player_id: str):
     game = games.get(game_id)
     if not game:
         game = {
-            'board': "boardGoesHere",
+            'board': chess.Board(),
+            'last_move':'',
             'turn': 0,
             'players': {
                 0: {'token': secrets.token_hex(16), 'ws': None, 'id': player_id},
@@ -132,6 +135,19 @@ async def register(algorithm: str, owner: str):
 
 wait={}
 
+def encode(board:chess.Board,last_move):
+    data={
+        'last_move':last_move,
+        'board':str(board),
+        'legal_moves':[str(move) for move in board.legal_moves],
+        'halfmove_clock':board.halfmove_clock,
+        'can_claim_draw':board.can_claim_draw(),
+        'outcome':str(board.outcome()),
+    }
+    return json.dumps(data)
+
+
+
 @app.websocket('/ws/{game_id}')
 async def websocket_endpoint(game_id: str, ws: WebSocket):
     global wait
@@ -152,15 +168,19 @@ async def websocket_endpoint(game_id: str, ws: WebSocket):
 
             message =await ws.receive_json()
             print("recived:",message)
-            if message['type'] == 'play_white':
+            if message['type'] == 'can_move':
                 current_player = get_current_player(game_id, token)
-                if current_player == 0:
+                if current_player == get_current_game(game_id)['turn']:
                     print("$",get_current_game(game_id)['turn'])
                     print("$",current_player)
                     await ws.send_text("True")
                 else:
                     print("#$", current_player)
                     await ws.send_text("False")
+            if message['type'] == 'board_info':
+                current_game=get_current_game(game_id)
+                await ws.send_text(encode(current_game['board'],current_game['last_move']))
+
             if message['type'] == 'move':
                     print("PLAYER:move")
                     # Check if it is the player's turn
@@ -177,6 +197,13 @@ async def websocket_endpoint(game_id: str, ws: WebSocket):
                     # Update the game state with the move
                     #move = message['move']
                     #get_current_game(game_id)['board'].make_move(move)
+                    board=get_current_game(game_id)['board']
+                    if not message['move'] in [str(move) for move in board.legal_moves]:
+                        print("ERROR illegal move",message['move'])
+                        await ws.send_text("fail")
+                        continue
+                    get_current_game(game_id)['board'].push_uci(message['move'])#make move
+
 
                     # Switch to the other player's turn
                     get_current_game(game_id)['turn'] = 1 - get_current_game(game_id)['turn']
@@ -185,9 +212,12 @@ async def websocket_endpoint(game_id: str, ws: WebSocket):
                     print("Send")
                     await ws.send_text("success")
                     if game_id in wait:
-                        for ws2 in wait[game_id]:
-                            print("Trully Send")
-                            await ws2.send_text("your move")
+                        for wait_dict in wait[game_id]:
+                            if wait_dict["active"]:
+                                wait_dict["active"]=False
+                                ws2=wait_dict["ws"]
+                                print("Trully Send")
+                                await ws2.send_text("your move")
                     #await send_game_state(game_id)
             elif message['type'] == 'test':
                 await ws.send_text("test_successful")
@@ -197,7 +227,7 @@ async def websocket_endpoint(game_id: str, ws: WebSocket):
                 await ws.send_text("You are conncted")
             elif message['type'] == 'wait':
                 print(message['type'])
-                wait[game_id]=wait.get(game_id,[])+[ws]
+                wait[game_id]=wait.get(game_id,[])+[{"ws":ws,"active":True}]
         except WebSocketDisconnect:
             print("error...")
             # Remove the player from the game
