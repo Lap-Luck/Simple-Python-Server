@@ -1,0 +1,6 @@
+websocket-client~=1.5.1
+uvicorn~=0.21.1
+fastapi~=0.95.0
+websockets~=11.0
+requests~=2.28.2
+chess~=1.9.4
