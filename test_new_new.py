@@ -34,7 +34,7 @@ def play(player_id,sever_talker):
             print("outcome",gameState['outcome'])
             break
         move=ai(gameState)
-        print(move)
+        #print(move)
         gameState = sever_talker({"type": "move and wait","move":move})
         time.sleep(0.1)
 
