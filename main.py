@@ -1,6 +1,7 @@
 import asyncio
 import time
 import websocket
+import threading
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException, Depends, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 import uvicorn
@@ -31,6 +32,7 @@ async def get_token(game_id: str, player_id: str):
     token = secrets.token_hex(16)
     if not serverData.games.get(game_id):
         serverData.games[game_id] = {
+            'Lock':asyncio.Lock(),
             'board': chess.Board(),
             'last_move': '',
             'turn': 0,
@@ -80,6 +82,7 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
         else:
             print("error")
             print("cid=",white_black_id)
+            print("correct id=",serverData.games[game_id]['turn'])
             print("player with move", game['players'][game['turn']])
             print("/error")
             return
@@ -88,7 +91,7 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
     #print(serverData.games[game_id]['player_waiting'])
     if serverData.games[game_id]['player_waiting'][player_to_wake]:
         while len(serverData.games[game_id]['players'])!=2:
-            #print("waiting..")
+            print("waiting..")
             time.sleep(0.1)
         ws_wake: WebSocket = serverData.games[game_id]['players'][player_to_wake]['ws']
         #print("WAKE:",white_black_id," in game= ",game_id)
@@ -111,7 +114,15 @@ async def websocket_endpoint(game_id: str, ws: WebSocket):
                     white_black_id=player_id
             #print("Hello",white_black_id)
             message = await ws.receive_json()
+
+
+            await serverData.games[game_id]['Lock'].acquire()
             await websocket_on_msg(message,game_id,white_black_id)
+            serverData.games[game_id]['Lock'].release()
+
+
+
+
         except WebSocketDisconnect:
             for player_id in range(len(game_players)):
                 player=game_players[player_id]
