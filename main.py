@@ -9,6 +9,8 @@ import secrets
 import json
 import chess
 
+CONFIG_TIME=4.0
+
 app = FastAPI()
 security = HTTPBearer()
 
@@ -20,13 +22,15 @@ class ServerData:
 
 serverData=ServerData()
 
+@app.get('/register/{name}/{owner}')
 @app.post('/register/{name}/{owner}')
 async def register(name: str, owner: str):
     id=serverData.player_next_id
     serverData.player_next_id+=1
-    serverData.players[id]={"name":name,"owner":str}
+    serverData.players[id]={"name":name,"owner":owner}
     return {'id': str(id)}
 
+@app.get('/token/game/{game_id}/player/{player_id}')
 @app.post('/token/game/{game_id}/player/{player_id}')
 async def get_token(game_id: str, player_id: str):
     token = secrets.token_hex(16)
@@ -39,13 +43,14 @@ async def get_token(game_id: str, player_id: str):
             'players': [],
             'subscribers': {},
             'player_waiting':{0:False,1:False},
-            #TODO TIME
-            #'player_time':{0:0.2,1:0.2},
-            #'time_stamp':None
+            'player_time':{0:CONFIG_TIME,1:CONFIG_TIME},
+            'time_stamp':None,
+            'time_out':False,
+            'time_winner':'white'
 
         }
     if len(serverData.games[game_id]['players'])<2:
-        serverData.games[game_id]['players']+=[{'token': token, 'ws': None, 'id': player_id},]
+        serverData.games[game_id]['players']+=[{'token': token, 'ws': None, 'id': int(player_id)},]
     else:
         return {}
     return {'token': token}
@@ -60,7 +65,7 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
         'legal_moves':[str(move) for move in game['board'].legal_moves],
         'halfmove_clock':game['board'].halfmove_clock,
         'can_claim_draw':game['board'].can_claim_draw(),
-        'outcome':str(game['board'].outcome()),
+        'outcome':str(game['board'].outcome()) if not game['time_out'] else "Outcome(termination=TIMEOUT)",
         }
     game = serverData.games[game_id]
     ws:WebSocket=game['players'][white_black_id]['ws']
@@ -69,11 +74,35 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
         game['player_waiting'][white_black_id]=True
     elif message['type'] == 'move and wait':
         def make_move(move):
-            board: chess.Board = serverData.games[game_id]['board']
-            #print("PUSH",move)
-            board.push_uci(move)
-            serverData.games[game_id]['turn']=1-serverData.games[game_id]['turn']
-            serverData.games[game_id]['player_waiting'][white_black_id] = True
+            if not game['time_stamp']:
+                game['time_stamp']=time.time()
+            if not game['time_out']:
+                old_time=game['time_stamp']
+                new_time=time.time()
+                game['time_stamp']=new_time
+                tiime_passed=new_time-old_time
+                game['player_time'][white_black_id]-=tiime_passed
+                print("\t",game_id,"INFO: time",game['player_time'][white_black_id])
+                if game['player_time'][white_black_id]<0.0:
+                    print("TIME_OUT",game_id,"player",game['players'][white_black_id])
+                    game['time_out']=True
+                    winner_id=game['players'][1-white_black_id]['id']
+                    winner=serverData.players[winner_id]
+                    print(winner)
+                    print("RESULT Game",game_id,"wins",winner['name'],"by",winner['owner'])
+
+                board: chess.Board = game['board']
+                print("\t",game_id,"PUSH",move)
+                board.push_uci(move)
+                game['turn']=1-game['turn']
+                #
+                print("WTF",game['player_waiting'])
+                game['player_waiting'][white_black_id] = True
+            else:
+                print("game already timeout")
+
+
+
             #print("MOVE:",move," in game= ",game_id)
         #print(white_black_id ,"move",message['move'])
         if white_black_id==serverData.games[game_id]['turn']:
@@ -83,7 +112,7 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
             print("error")
             print("cid=",white_black_id)
             print("correct id=",serverData.games[game_id]['turn'])
-            print("player with move", game['players'][game['turn']])
+            print("player with move", game['players'][game['turn']]['id'])
             print("/error")
             return
 
@@ -94,19 +123,40 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
             print("waiting..")
             time.sleep(0.1)
         ws_wake: WebSocket = serverData.games[game_id]['players'][player_to_wake]['ws']
-        #print("WAKE:",white_black_id," in game= ",game_id)
+        print(player_to_wake,"WAKE:",player_to_wake," in game= ",game_id)
+        serverData.games[game_id]['player_waiting'][player_to_wake]=False#new
         await ws_wake.send_json(game_state(game_id))
 
 @app.websocket('/ws/{game_id}')
 async def websocket_endpoint(game_id: str, ws: WebSocket):
     global wait
-    #print("accepting...")
+    print("accepting...")
     await ws.accept()
     game_players=serverData.games[game_id]['players']
     white_black_id=-1
+
+    #print("_Au__")
+    token = ""
+    if 'Authorization' in ws.headers:
+        token = ws.headers['Authorization']
+    else:
+        #print("_Aw__")
+        try:
+            json_token_text = await ws.receive_text()
+            print("XXX",json_token_text)
+            json_token=json.loads(json_token_text)
+            token=json_token["token"]
+            print("XXX=", token)
+        except WebSocketDisconnect:
+            print("WebSocketDisconnect!!!!!!!!!!!!!!!!!")
+            return
+    #print("_Ao__", token)
+
+
+
     while True:
         try:
-            token = ws.headers['Authorization']
+
             for player_id in range(len(game_players)):
                 player=game_players[player_id]
                 if player['token'] == token:
@@ -114,7 +164,7 @@ async def websocket_endpoint(game_id: str, ws: WebSocket):
                     white_black_id=player_id
             #print("Hello",white_black_id)
             message = await ws.receive_json()
-
+            print(white_black_id,message)
 
             await serverData.games[game_id]['Lock'].acquire()
             await websocket_on_msg(message,game_id,white_black_id)
