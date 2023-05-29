@@ -34,7 +34,7 @@ namespace WebApp1
 
             using (var client = new WebsocketClient(url))
             {
-
+                var running = true;
                 
                 client.ReconnectTimeout = TimeSpan.FromSeconds(3000000);
                 client.ReconnectionHappened.Subscribe(info =>Console.WriteLine($"Reconnection happened, type: {info.Type}"));
@@ -47,12 +47,34 @@ namespace WebApp1
                 Thread.Sleep(100);
                 client.Send(new JsonObject { ["type"] = "wait"}.ToJsonString());
 
+                client.MessageReceived.Subscribe(async MessageGameState => {
+                    JsonNode GameState = JsonNode.Parse(MessageGameState.ToString());
+                    
 
-                while (true)
+                    if (GameState["outcome"].ToString().Length>8)
+                    {
+                        running = false;
+                        Console.WriteLine(GameState["outcome"].ToString());
+                        return;
+
+                    }
+
+                    //your chess logic goes here
+
+                    var move = GameState["legal_moves"][0];
+                    Console.WriteLine(move.ToString());
+
+
+                    client.Send(new JsonObject { ["type"] = "move and wait",["move"] = move.ToString() }.ToJsonString());
+
+                });
+
+
+                while (running)
                 {
                     Thread.Sleep(100);
                 }
-                
+                Console.WriteLine("THE END");
             }
 
 
