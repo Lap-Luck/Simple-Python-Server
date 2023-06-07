@@ -111,10 +111,19 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
                 game["last_move"]=move
                 game['turn']=1-game['turn']
                 #
-                print("WTF",game['player_waiting'])
+                #print("WTF",game['player_waiting'])#TODO
                 game['player_waiting'][white_black_id] = True
             else:
                 print("game already timeout")
+            board: chess.Board = game['board']
+            if board.outcome():
+                print("%%%%%%%%%%%%%%%%%")
+                print(board.result())
+                print(serverData.players[game["players"][0]["id"]]["name"], "vs",
+                      serverData.players[game["players"][1]["id"]]["name"])
+                print("%%%%%%%%%%%%%%%%%")
+                print(board.outcome())
+                print("%%%%%%%%%%%%%%%%%")
 
 
 
