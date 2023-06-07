@@ -9,7 +9,9 @@ import secrets
 import json
 import chess
 
-CONFIG_TIME=4.0
+
+CONFIG_TIME=60.0
+CONFIG_TIME_INC=1.0
 
 app = FastAPI()
 security = HTTPBearer()
@@ -24,10 +26,15 @@ serverData=ServerData()
 
 @app.get('/register/{name}/{owner}')
 @app.post('/register/{name}/{owner}')
-async def register(name: str, owner: str):
+@app.get('/register/{name}/{owner}/{mode}')
+@app.post('/register/{name}/{owner}/{mode}')
+async def register(name: str, owner: str,mode="full_data"):
+    if not mode in ["move_only","full_data"]:
+        mode="full_data"
+    print("NEW PL",name,mode)
     id=serverData.player_next_id
     serverData.player_next_id+=1
-    serverData.players[id]={"name":name,"owner":owner}
+    serverData.players[id]={"name":name,"owner":owner,'mode':mode}
     return {'id': str(id)}
 
 @app.get('/token/game/{game_id}/player/{player_id}')
@@ -50,15 +57,22 @@ async def get_token(game_id: str, player_id: str):
 
         }
     if len(serverData.games[game_id]['players'])<2:
-        serverData.games[game_id]['players']+=[{'token': token, 'ws': None, 'id': int(player_id)},]
+        serverData.games[game_id]['players']+=[{'token': token, 'ws': None, 'id': int(player_id),
+                                                'mode':serverData.players[int(player_id)]['mode']},]
+
     else:
         return {}
     return {'token': token}
 
 
 async def websocket_on_msg(message,game_id:int,white_black_id:int):
-    def game_state(game_id: str):
+    def game_state(game_id: str,mode):
         game=serverData.games[game_id]
+        if mode=="move_only":
+            return {
+            'last_move':game['last_move'],
+            'outcome':str(game['board'].outcome()) if not game['time_out'] else "Outcome(termination=TIMEOUT)",
+            }
         return {
         'last_move':game['last_move'],
         'board':str(game['board']),
@@ -81,7 +95,7 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
                 new_time=time.time()
                 game['time_stamp']=new_time
                 tiime_passed=new_time-old_time
-                game['player_time'][white_black_id]-=tiime_passed
+                game['player_time'][white_black_id]-=tiime_passed-CONFIG_TIME_INC
                 print("\t",game_id,"INFO: time",game['player_time'][white_black_id])
                 if game['player_time'][white_black_id]<0.0:
                     print("TIME_OUT",game_id,"player",game['players'][white_black_id])
@@ -94,6 +108,7 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
                 board: chess.Board = game['board']
                 print("\t",game_id,"PUSH",move)
                 board.push_uci(move)
+                game["last_move"]=move
                 game['turn']=1-game['turn']
                 #
                 print("WTF",game['player_waiting'])
@@ -125,7 +140,8 @@ async def websocket_on_msg(message,game_id:int,white_black_id:int):
         ws_wake: WebSocket = serverData.games[game_id]['players'][player_to_wake]['ws']
         print(player_to_wake,"WAKE:",player_to_wake," in game= ",game_id)
         serverData.games[game_id]['player_waiting'][player_to_wake]=False#new
-        await ws_wake.send_json(game_state(game_id))
+        mode=serverData.games[game_id]['players'][player_to_wake]['mode']
+        await ws_wake.send_json(game_state(game_id,mode))
 
 @app.websocket('/ws/{game_id}')
 async def websocket_endpoint(game_id: str, ws: WebSocket):
